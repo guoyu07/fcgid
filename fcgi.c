@@ -21,7 +21,6 @@
 #include <sysexits.h>
 #include <stdlib.h>
 
-
 #define BUF_SIZE 5000
 #define FCGI_SERVER "10.48.25.160"
 #define FCGI_PORT "9000"
@@ -157,14 +156,13 @@ void simple_session_1(int sockfd, ph_sock_t *sock)
     /*print_bytes(buf, p-buf);*/
 
     if (send(sockfd, buf, p-buf, 0) == -1) {
-            perror("send");
-            close(sockfd);
-            return;
+      perror("send");
+      close(sockfd);
+      return;
     }
     
     fcgi_record_list *rlst = NULL, *rec;
-    fcgi_record *h;
-    
+     
     while(1) {
         if ((nb = recv(sockfd, rbuf, BUF_SIZE-1, 0)) == -1) {
             perror("recv");
@@ -177,11 +175,13 @@ void simple_session_1(int sockfd, ph_sock_t *sock)
     
     for(rec=rlst; rec!=NULL; rec=rec->next)
     {
-        /*if(rec->header->type == FCGI_STDOUT)*/
-            /*printf("PADD<%d>", rec->header->padding_len);*/
-            /*printf("%d\n", rec->length);*/
-            /*for(i=0;i < rec->length; i++) fprintf(stdout, "%c", ((uchar *)rec->content)[i]);*/
-
+      // if(rec->header->type == FCGI_STDOUT) {
+      // printf("PADD<%d>", rec->header->padding_len);
+      // }
+      // printf("%d\n", rec->length);
+      // for(i=0;i < rec->length; i++) {
+      // fprintf(stdout, "%c", ((uchar *)rec->content)[i]);
+      // }
     }
 }
 
