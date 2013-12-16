@@ -7,6 +7,11 @@ be manually started(Using the script in bin).
 The php-fastcgi script included was taken from nginx wikipage on fcgi
 http://wiki.nginx.org/FcgiExample
 
+Install
+========
+gcc -Wl,-rpath=/home/work/local/libphenom/lib -O2 -I./include fcgi_header.c fcgi.c `pkg-config libphenom --cflags --libs` -lphenom -L/home/work/local/libphenom/lib
+
+
 Reference
 ==========
 Nginx fastcgi module
