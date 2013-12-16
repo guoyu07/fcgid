@@ -1,11 +1,6 @@
-Simple FASTCGI client
+FastCGI Proxy Service
 ====================
-This FASTCGI client executes a file given as an argument in php over fastcgi.
-The HTTP headers are hardcoded as an array in fcgi.c. Php fastcgi process has to
-be manually started(Using the script in bin). 
-
-The php-fastcgi script included was taken from nginx wikipage on fcgi
-http://wiki.nginx.org/FcgiExample
+facebook libphenom + fastcgi_client + php-fpm
 
 Install
 ========
