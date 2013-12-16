@@ -10,8 +10,20 @@
 
 #include <arpa/inet.h>
 
+#include "phenom/defs.h"
+#include "phenom/configuration.h"
+#include "phenom/job.h"
+#include "phenom/log.h"
+#include "phenom/sysutil.h"
+#include "phenom/printf.h"
+#include "phenom/listener.h"
+#include "phenom/socket.h"
+#include <sysexits.h>
+#include <stdlib.h>
+
+
 #define BUF_SIZE 5000
-#define FCGI_SERVER "127.0.0.1"
+#define FCGI_SERVER "10.48.25.160"
 #define FCGI_PORT "9000"
 #define MAXDATASIZE 1000
 
@@ -19,7 +31,7 @@
 fcgi_name_value nvs[N_NameValue] = {
 {"SCRIPT_FILENAME", "/home/abhigna/test.php"},
 {"SCRIPT_NAME", "/test.php"},
-{"DOCUMENT_ROOT", "/home/abhigna/"},
+{"DOCUMENT_ROOT", "/home/work/"},
 {"REQUEST_URI", "/test.php"},
 {"PHP_SELF", "/test.php"},
 {"TERM", "linux"},
@@ -95,7 +107,8 @@ int fcgi_connect(int *sock){
 }
 
 
-void simple_session_1(int sockfd){
+void simple_session_1(int sockfd, ph_sock_t *sock)
+{
     uint16_t req_id = 1;
     uint16_t len=0;
     int nb, i;
@@ -143,24 +156,25 @@ void simple_session_1(int sockfd){
 
     /*print_bytes(buf, p-buf);*/
 
-    if (send(sockfd, buf, p-buf, 0) == -1){
+    if (send(sockfd, buf, p-buf, 0) == -1) {
             perror("send");
             close(sockfd);
             return;
     }
+    
     fcgi_record_list *rlst = NULL, *rec;
-
-    while(1){
+    fcgi_record *h;
+    
+    while(1) {
         if ((nb = recv(sockfd, rbuf, BUF_SIZE-1, 0)) == -1) {
             perror("recv");
             exit(1);
         }
-        if(nb == 0)
-            break;
-        fcgi_process_buffer(rbuf, rbuf+(size_t)nb, &rlst);
-
+        if(nb == 0) break;
+        
+        fcgi_process_buffer(rbuf, rbuf+(size_t)nb, &rlst, sock);
     }
-
+    
     for(rec=rlst; rec!=NULL; rec=rec->next)
     {
         /*if(rec->header->type == FCGI_STDOUT)*/
@@ -171,16 +185,212 @@ void simple_session_1(int sockfd){
     }
 }
 
-int main(int argc, char **argv){
-    int sockfd;
-    if( argc != 2){
-        printf("Usage: %s <Absolute path of file>\n", argv[0]);
-        return 0;
+static bool enable_ssl = false;
+
+// Each connected session will have one of these structs associated with it.
+// We don't really do anything useful with it here, it's just to show how
+// to associate data with a session
+struct echo_state {
+  int num_lines;
+};
+
+// We'll track our state instances using our own typed memory.
+// Use the debug console to inspect it; this is useful to figure out if
+// or where you might be leaking memory
+static ph_memtype_t mt_state;
+static struct ph_memtype_def mt_state_def = {
+  "example", "echo_state", sizeof(struct echo_state), PH_MEM_FLAGS_ZERO
+};
+
+// Called each time the session wakes up.
+// The `why` parameter indicates why we were woken up
+static void echo_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
+{
+  struct echo_state *state = arg;
+  ph_buf_t *buf;
+
+  // If the socket encountered an error, or if the timeout was reached
+  // (there's a default timeout, even if we didn't override it), then
+  // we tear down the session
+  if (why & (PH_IOMASK_ERR|PH_IOMASK_TIME)) {
+    ph_log(PH_LOG_ERR, "disconnecting `P{sockaddr:%p}", (void*)&sock->peername);
+    ph_sock_shutdown(sock, PH_SOCK_SHUT_RDWR);
+    ph_mem_free(mt_state, state);
+    ph_sock_free(sock);
+    return;
+  }
+
+  // We loop because echo_processor is only triggered by newly arriving
+  // data or events from the kernel.  If we have data buffered and only
+  // partially consume it, we won't get woken up until the next data
+  // arrives, if ever.
+  while (1) {
+    // Try to read a line of text.
+    // This returns a slice over the underlying buffer (if the line was
+    // smaller than a buffer) or a freshly made contiguous buffer (if the
+    // line was larger than our buffer segment size).  Either way, we
+    // own a reference to the returned buffer and should treat it as
+    // a read-only slice.
+    buf = ph_sock_read_line(sock);
+    if (!buf) {
+      // Not available yet, we'll try again later
+      return;
     }
-    else
-        nvs[0].value = argv[1];
+
+    // We got a line; update our state
+    state->num_lines++;
+
+    // Send our response.  The data is buffered and automatically sent
+    // to the client as it becomes writable, so we don't need to handle
+    // partial writes or EAGAIN here.
+
+    // If this was a "real" server, we would still check the return value
+    // from the writes and proceed to tear down the session if things failed.
+
+    // Note that buf includes the trailing CRLF, so our response
+    // will implicitly end with CRLF too.
+
+    int sockfd;
+    fcgi_record *h;
+    nvs[0].value = "/home/work/local/httpd/htdocs/ip.php";
+    nvs[18].value = ph_buf_mem(buf);
+    
     fcgi_connect(&sockfd);
-    simple_session_1(sockfd);
+    
+    simple_session_1(sockfd, sock);
+    
+    ph_stm_printf(sock->stream, "You said [%d]: ", state->num_lines);
+    ph_stm_write(sock->stream, ph_buf_mem(buf), ph_buf_len(buf), NULL);
+
+    
     close(sockfd);
+    
     return 0;
+    
+
+    // We're done with buf, so we must release it
+    ph_buf_delref(buf);
+  }
 }
+
+static void done_handshake(ph_sock_t *sock, int res)
+{
+  ph_unused_parameter(sock);
+  ph_log(PH_LOG_ERR, "handshake completed with res=%d", res);
+}
+
+// Called each time the listener has accepted a client connection
+static void acceptor(ph_listener_t *lstn, ph_sock_t *sock)
+{
+  ph_unused_parameter(lstn);
+
+  // Allocate an echo_state instance and stash it.
+  // This is set to be zero'd on creation and will show up as the
+  // `arg` parameter in `echo_processor`
+  sock->job.data = ph_mem_alloc(mt_state);
+
+  // Tell it how to dispatch
+  sock->callback = echo_processor;
+
+  ph_log(PH_LOG_ERR, "accepted `P{sockaddr:%p}", (void*)&sock->peername);
+
+  if (enable_ssl) {
+    SSL_CTX *ctx = SSL_CTX_new(SSLv23_server_method());
+    SSL *ssl;
+
+    SSL_CTX_set_cipher_list(ctx, "ALL");
+    SSL_CTX_use_RSAPrivateKey_file(ctx, "examples/server.pem", SSL_FILETYPE_PEM);
+    SSL_CTX_use_certificate_file(ctx, "examples/server.pem", SSL_FILETYPE_PEM);
+    SSL_CTX_set_options(ctx, SSL_OP_ALL);
+    ssl = SSL_new(ctx);
+
+    ph_sock_openssl_enable(sock, ssl, false, done_handshake);
+  }
+
+  ph_sock_enable(sock, true);
+}
+
+int main(int argc, char **argv)
+{
+  int c;
+  uint16_t portno = 8080;
+  char *addrstring = NULL;
+  ph_sockaddr_t addr;
+  ph_listener_t *lstn;
+  bool use_v4 = false;
+
+  // Must be called prior to calling any other phenom functions
+  ph_library_init();
+
+  while ((c = getopt(argc, argv, "p:l:4s")) != -1) {
+    switch (c) {
+      case '4':
+        use_v4 = true;
+        break;
+      case 's':
+        enable_ssl = true;
+        break;
+      case 'l':
+        addrstring = optarg;
+        break;
+      case 'p':
+        portno = atoi(optarg);
+        break;
+      default:
+        ph_fdprintf(STDERR_FILENO,
+            "Invalid parameters\n"
+            " -4          - interpret address as an IPv4 address\n"
+            " -l ADDRESS  - which address to listen on\n"
+            " -p PORTNO   - which port to listen on\n"
+            " -s          - enable SSL\n"
+        );
+        exit(EX_USAGE);
+    }
+  }
+
+  if (enable_ssl) {
+    ph_library_init_openssl();
+  }
+
+  // Set up the address that we're going to listen on
+  if ((use_v4 && ph_sockaddr_set_v4(&addr, addrstring, portno) != PH_OK) ||
+      (!use_v4 && ph_sockaddr_set_v6(&addr, addrstring, portno) != PH_OK)) {
+    ph_fdprintf(STDERR_FILENO,
+        "Invalid address [%s]:%d",
+        addrstring ? addrstring : "*",
+        portno
+    );
+    exit(EX_USAGE);
+  }
+
+  // Register our memtype
+  mt_state = ph_memtype_register(&mt_state_def);
+
+  // Optional config file for tuning internals
+  ph_config_load_config_file("/path/to/my/config.json");
+
+  // Enable the non-blocking IO manager
+  ph_nbio_init(0);
+
+  ph_log(PH_LOG_ERR, "will listen on `P{sockaddr:%p}", (void*)&addr);
+
+  // This enables a very simple request/response console
+  // that allows you to run diagnostic commands:
+  // `echo memory | nc -UC /tmp/phenom-debug-console`
+  // (on BSD systems, use `nc -Uc`!)
+  // The code behind this is in
+  // https://github.com/facebook/libphenom/blob/master/corelib/debug_console.c
+  ph_debug_console_start("/tmp/phenom-debug-console");
+
+  lstn = ph_listener_new("echo-server", acceptor);
+  ph_listener_bind(lstn, &addr);
+  ph_listener_enable(lstn, true);
+
+  // Run
+  ph_sched_run();
+
+  return 0;
+}
+
+/* vim:ts=2:sw=2:et:
+ */

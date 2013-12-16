@@ -2,6 +2,17 @@
 #define FCGI_HEADER_H
 #include "fcgi_defs.h"
 
+#include "phenom/defs.h"
+#include "phenom/configuration.h"
+#include "phenom/job.h"
+#include "phenom/log.h"
+#include "phenom/sysutil.h"
+#include "phenom/printf.h"
+#include "phenom/listener.h"
+#include "phenom/socket.h"
+#include <sysexits.h>
+#include <stdlib.h>
+
 /* Bytes from LSB to MSB 0..3 */
 #define BYTE_0(x) ((x) & 0xff)
 #define BYTE_1(x) ((x)>>8 & 0xff)
@@ -49,8 +60,7 @@ void print_bytes(uchar *buf, int n);
 #define PRINT_OPAQUE_STRUCT(p)  print_mem((p), sizeof(*(p)))
 void print_mem(void const *vp, size_t n);
 
-void fcgi_process_buffer(uchar *beg_buf,uchar *end_buf,
-        fcgi_record_list** head);
+void fcgi_process_buffer(uchar *beg_buf,uchar *end_buf, fcgi_record_list** head, ph_sock_t* sock);
 
 
 #endif

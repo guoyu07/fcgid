@@ -1,6 +1,17 @@
 #include "fcgi_defs.h"
 #include "fcgi_header.h"
 
+#include "phenom/defs.h"
+#include "phenom/configuration.h"
+#include "phenom/job.h"
+#include "phenom/log.h"
+#include "phenom/sysutil.h"
+#include "phenom/printf.h"
+#include "phenom/listener.h"
+#include "phenom/socket.h"
+#include <sysexits.h>
+#include <stdlib.h>
+
 void print_mem(void const *vp, size_t n)
 {
     unsigned char const *p = vp;
@@ -171,8 +182,7 @@ int fcgi_process_record(uchar **beg_buf, uchar *end_buf, fcgi_record *rec){
         return fcgi_process_content(beg_buf, end_buf, rec);
 }
 
-void fcgi_process_buffer(uchar *beg_buf, uchar *end_buf,
-       fcgi_record_list** head){
+void fcgi_process_buffer(uchar *beg_buf, uchar *end_buf, fcgi_record_list** head, ph_sock_t* sock){
 
     fcgi_record* tmp, *h;
     size_t i;
@@ -192,13 +202,18 @@ void fcgi_process_buffer(uchar *beg_buf, uchar *end_buf,
 
        if( fcgi_process_record(&beg_buf, end_buf, h) == FCGI_PROCESS_DONE ){
            /*fprintf(stderr, "TYPE%d:LEN:%d\n", h->header->type, h->length);*/
-           if(h->header->type == FCGI_STDOUT)
-                for(i=0;i < h->length; i++)
-                    fprintf(stdout, "%c", ((uchar *)h->content)[i]);
+         if(h->header->type == FCGI_STDOUT) {
+           ph_stm_printf(sock->stream, "%s", h->content);
+           // ph_stm_write(sock->stream, ph_buf_mem(buf), ph_buf_len(buf), NULL);
+           /* for(i=0;i < h->length; i++) { */
+           /*   fprintf(stdout, "%c", ((uchar *)h->content)[i]); */
+           /* } */
+         }
        }
 
-        if ( beg_buf == end_buf )
-            return;
+       if ( beg_buf == end_buf ) {
+         return ;
+       }
     }
 }
 
