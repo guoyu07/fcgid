@@ -5,10 +5,7 @@ facebook libphenom + fastcgi_client + php-fpm
 
 Install
 --------
-
-gcc -Wl,-rpath=/home/work/local/libphenom/lib -O2 -I./include fcgi_header.c fcgi.c `pkg-config libphenom --cflags --libs` -lphenom -L/home/work/local/libphenom/lib
-
-
+Modify Makfile for your env, and then just `make`
 
 Reference
 ---------
