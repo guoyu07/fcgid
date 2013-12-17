@@ -5,12 +5,12 @@ INCDIR  = -I./include -I/home/work/local/libphenom/include
 OBJ     = fcgi.o fcgi_header.o
 LIBS    = -lphenom -lssl
 
-fcgi: $(OBJ)
+fcgid: $(OBJ)
 	$(CC) $(CFLAGS) $(DEFS) $(LDFLAGS) -o $@ $(OBJ)  $(LIBS)
 
 clean:
 	rm -rf *.o
-	rm fcgi
+	rm fcgid
 .c.o:
 	$(CC) -c $(CFLAGS) $(DEFS) $(INCDIR) $< 
 
