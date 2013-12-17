@@ -1,4 +1,4 @@
-FastCGI Proxy Service
+FastCGI Proxy Server
 =====================
 
 facebook libphenom + fastcgi_client + php-fpm
