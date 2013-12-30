@@ -7,6 +7,14 @@ Install
 --------
 Modify Makfile for your env, and then just `make`
 
+Or You can use CMake:
+
+`mkdir build`
+
+`cd buiild`
+
+`cmake .. -DLIBPHENOM_PATH=/home/ideal/local/libphenom`
+
 Reference
 ---------
 
