@@ -77,7 +77,7 @@ static struct ph_memtype_def mt_state_def = {
 
 void simple_session_1(int sockfd, void *data)
 {
-    uint16_t req_id = 1;
+    uint16_t req_id;
     uint16_t len=0;
     int nb, i;
     unsigned char *p, *buf, *rbuf;
@@ -86,6 +86,8 @@ void simple_session_1(int sockfd, void *data)
 
     struct fcgid_state *state = data;    
 
+    req_id = state->num_lines;
+    
     // nvs[0].value = state->script_name;
     // nvs[18].value = state->get;
     
@@ -128,9 +130,9 @@ void simple_session_1(int sockfd, void *data)
     print_bytes(buf, p-buf);
 
     if (send(sockfd, buf, p-buf, 0) == -1) {
-            perror("send");
-            close(sockfd);
-            return;
+      perror("send");
+      close(sockfd);
+      return;
     }
     
     fcgi_record_list *rlst = NULL, *rec;
@@ -140,12 +142,12 @@ void simple_session_1(int sockfd, void *data)
             perror("recv");
             exit(1);
         }
-        if(nb == 0)
-            break;
+        if(nb == 0) break;
         fcgi_process_buffer(rbuf, rbuf+(size_t)nb, &rlst, state->remote_sock);
-
     }
 
+    close(sockfd);
+    
     for(rec=rlst; rec!=NULL; rec=rec->next)
     {
       /*if(rec->header->type == FCGI_STDOUT)*/
