@@ -1,7 +1,6 @@
-#include "fcgi_defs.h"
 #include "fcgi_header.h"
+#include "fcgi_defs.h"
 
-#include "phenom/defs.h"
 #include "phenom/configuration.h"
 #include "phenom/job.h"
 #include "phenom/log.h"

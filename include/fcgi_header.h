@@ -1,5 +1,7 @@
 #ifndef FCGI_HEADER_H
 #define FCGI_HEADER_H
+
+#include "phenom/defs.h"
 #include "fcgi_defs.h"
 
 #include "phenom/defs.h"
