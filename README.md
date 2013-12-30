@@ -9,7 +9,11 @@ Modify Makfile for your env, and then just `make`
 
 Or You can use CMake:
 
-cmake .. -DLIBPHENOM_PATH=/home/ideal/local/libphenom
+`mkdir build`
+
+`cd buiild`
+
+`cmake .. -DLIBPHENOM_PATH=/home/ideal/local/libphenom`
 
 Reference
 ---------
