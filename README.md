@@ -13,7 +13,7 @@ Or You can use CMake:
 
 `cd buiild`
 
-`cmake .. -DLIBPHENOM_PATH=/home/ideal/local/libphenom`
+`cmake .. -DLIBPHENOM_PATH=/path/to/libphenom`
 
 Reference
 ---------
