@@ -22,4 +22,6 @@ link_directories(${LIBPHENOM_PATH}/lib)
 add_executable(fcgid ${fcgid_SRCS})
 target_link_libraries(fcgid phenom ssl)
 
+set(CMAKE_INSTALL_RPATH "${LIBPHENOM_PATH}/lib")
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 install(TARGETS fcgid DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
