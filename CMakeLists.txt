@@ -17,9 +17,9 @@ if (NOT LIBPHENOM_PATH)
 endif(NOT LIBPHENOM_PATH)
 
 include_directories(${LIBPHENOM_PATH}/include)
-link_directories(${LIBPHENOM_PATH}/corelib)
+link_directories(${LIBPHENOM_PATH}/lib)
 
 add_executable(fcgid ${fcgid_SRCS})
-target_link_libraries(fcgid phenom)
+target_link_libraries(fcgid phenom ssl)
 
 install(TARGETS fcgid DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
