@@ -1,12 +1,14 @@
 {
-"SERVER_NAME":"BULLSOFT_FCGI_SERVER",
-"SERVER_HOST":"0.0.0.0",
-"SERVER_PORT":8080,
+"SERVER": {
+    "NAME":"BULLSOFT_FCGI_SERVER",
+    "HOST":"0.0.0.0",
+    "PORT":8080,
+    "ENABLE_SSL":true
+},
 "DOCUMENT_ROOT":"/home/work/local/httpd/htdocs/",
 "FCGI_SERVER":
     [
         {"HOST":"", "PORT":""},
         {"HOST":"", "PORT":""}
     ]
-    
 }

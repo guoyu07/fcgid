@@ -1,14 +1,15 @@
-#include "fcgi_defs.h"
-#include "fcgi_header.h"
-
 #include <unistd.h>
 #include <errno.h>
 #include <netdb.h>
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
-
 #include <arpa/inet.h>
+#include <sysexits.h>
+#include <stdlib.h>
+
+#include "fcgi_defs.h"
+#include "fcgi_header.h"
 
 #include "phenom/defs.h"
 #include "phenom/configuration.h"
@@ -18,19 +19,17 @@
 #include "phenom/printf.h"
 #include "phenom/listener.h"
 #include "phenom/socket.h"
-#include <sysexits.h>
-#include <stdlib.h>
 
 #define BUF_SIZE 5000
 #define FCGI_SERVER "10.48.25.160"
-#define FCGI_PORT "9000"
+#define FCGI_PORT "8888"
 #define MAXDATASIZE 1000
 
 #define N_NameValue 27
 fcgi_name_value nvs[N_NameValue] = {
-{"SCRIPT_FILENAME", "/home/abhigna/test.php"},
+{"SCRIPT_FILENAME", "/home/work/local/httpd/htdocs/ip.php"},
 {"SCRIPT_NAME", "/test.php"},
-{"DOCUMENT_ROOT", "/home/work/"},
+{"DOCUMENT_ROOT", "/home/abhigna/"},
 {"REQUEST_URI", "/test.php"},
 {"PHP_SELF", "/test.php"},
 {"TERM", "linux"},
@@ -46,7 +45,7 @@ fcgi_name_value nvs[N_NameValue] = {
 {"REMOTE_PORT", ""},
 {"REMOTE_ADDR", "127.0.0.1"},
 {"PATH_INFO", "no value"},
-{"QUERY_STRING", "no value"},
+{"QUERY_STRING", "way=get"},
 {"REQUEST_METHOD", "GET"},
 {"REDIRECT_STATUS", "200"},
 {"SERVER_PROTOCOL", "HTTP/1.1"},
@@ -57,56 +56,26 @@ fcgi_name_value nvs[N_NameValue] = {
 {"HTTP_ACCEPT_LANGUAGE", "en-US,en;q=0.8"},
 };
 
-void *get_in_addr(struct sockaddr *sa)
-{
-    if (sa->sa_family == AF_INET) {
-        return &(((struct sockaddr_in*)sa)->sin_addr);
-    }
-    return &(((struct sockaddr_in6*)sa)->sin6_addr);
-}
+static bool enable_ssl = false;
 
-int fcgi_connect(int *sock){
-    int sockfd;//, numbytes;
-    struct addrinfo hints, *servinfo, *p;
-    int rv;
+// fcgid connected session will have one of these structs associated with it
+struct fcgid_state {
+  int num_lines;
+  ph_sock_t *remote_sock;
+  char *script_name;
+  char *get;
+};
 
-    memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
+// We'll track our state instances using our own typed memory.
+// Use the debug console to inspect it; this is useful to figure out if
+// or where you might be leaking memory
+static ph_memtype_t mt_state;
 
-    if ((rv = getaddrinfo(FCGI_SERVER, FCGI_PORT, &hints, &servinfo)) != 0) {
-        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
-        return 1;
-    }
+static struct ph_memtype_def mt_state_def = {
+  "fcgid", "fcgid_state", sizeof(struct fcgid_state), PH_MEM_FLAGS_ZERO
+};
 
-    for(p = servinfo; p != NULL; p = p->ai_next) {
-        if ((sockfd = socket(p->ai_family, p->ai_socktype,
-                p->ai_protocol)) == -1) {
-            perror("client: socket");
-            continue;
-        }
-
-        if (connect(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
-            close(sockfd);
-            perror("client: connect");
-            continue;
-        }
-
-        break;
-    }
-
-    if (p == NULL) {
-        fprintf(stderr, "client: failed to connect\n");
-        return 2;
-    }
-
-    freeaddrinfo(servinfo);
-    *sock = sockfd;
-    return 0;
-}
-
-
-void simple_session_1(int sockfd, ph_sock_t *sock)
+void simple_session_1(int sockfd, void *data)
 {
     uint16_t req_id = 1;
     uint16_t len=0;
@@ -115,6 +84,11 @@ void simple_session_1(int sockfd, ph_sock_t *sock)
     fcgi_header* head;
     fcgi_begin_request* begin_req = create_begin_request(req_id);
 
+    struct fcgid_state *state = data;    
+
+    // nvs[0].value = state->script_name;
+    // nvs[18].value = state->get;
+    
     rbuf = malloc(BUF_SIZE);
     buf  = malloc(BUF_SIZE);
     p = buf;
@@ -136,7 +110,6 @@ void simple_session_1(int sockfd, ph_sock_t *sock)
     head->content_len_lo = BYTE_0(len);
     head->content_len_hi = BYTE_1(len);
 
-
     serialize(p, head, sizeof(fcgi_header));
     p += sizeof(fcgi_header);
 
@@ -151,64 +124,77 @@ void simple_session_1(int sockfd, ph_sock_t *sock)
     serialize(p, head, sizeof(fcgi_header));
     p += sizeof(fcgi_header);
 
-    /*printf("Total bytes sending %ld", p-buf);*/
-
-    /*print_bytes(buf, p-buf);*/
+    printf("Total bytes sending %ld\n", p-buf);
+    print_bytes(buf, p-buf);
 
     if (send(sockfd, buf, p-buf, 0) == -1) {
-      perror("send");
-      close(sockfd);
-      return;
+            perror("send");
+            close(sockfd);
+            return;
     }
     
     fcgi_record_list *rlst = NULL, *rec;
-     
+
     while(1) {
         if ((nb = recv(sockfd, rbuf, BUF_SIZE-1, 0)) == -1) {
             perror("recv");
             exit(1);
         }
-        if(nb == 0) break;
-        
-        fcgi_process_buffer(rbuf, rbuf+(size_t)nb, &rlst, sock);
+        if(nb == 0)
+            break;
+        fcgi_process_buffer(rbuf, rbuf+(size_t)nb, &rlst, state->remote_sock);
+
     }
-    
+
     for(rec=rlst; rec!=NULL; rec=rec->next)
     {
-      // if(rec->header->type == FCGI_STDOUT) {
-      // printf("PADD<%d>", rec->header->padding_len);
-      // }
-      // printf("%d\n", rec->length);
-      // for(i=0;i < rec->length; i++) {
-      // fprintf(stdout, "%c", ((uchar *)rec->content)[i]);
-      // }
+      /*if(rec->header->type == FCGI_STDOUT)*/
+      /*printf("PADD<%d>", rec->header->padding_len);*/
+      /*printf("%d\n", rec->length);*/
+      /*for(i=0;i < rec->length; i++) fprintf(stdout, "%c", ((uchar *)rec->content)[i]);*/
     }
 }
 
-static bool enable_ssl = false;
+static void done_handshake(ph_sock_t *sock, int res)
+{
+  ph_unused_parameter(sock);
+  ph_log(PH_LOG_ERR, "handshake completed with res=%d", res);
+}
 
-// Each connected session will have one of these structs associated with it.
-// We don't really do anything useful with it here, it's just to show how
-// to associate data with a session
-struct echo_state {
-  int num_lines;
-};
 
-// We'll track our state instances using our own typed memory.
-// Use the debug console to inspect it; this is useful to figure out if
-// or where you might be leaking memory
-static ph_memtype_t mt_state;
-static struct ph_memtype_def mt_state_def = {
-  "example", "echo_state", sizeof(struct echo_state), PH_MEM_FLAGS_ZERO
-};
+static void connected(ph_socket_t sockfd, const ph_sockaddr_t *addr,
+                      int status, 
+                      struct timeval *elapsed, void *arg)
+{
+  
+  if(sockfd != -1 && status ==0) {
+    printf("connected successfuly...\n");
+  }
+  
+  if(sockfd == -1) {
+    printf("err no\n");
+    exit(1);
+  }
+  
+  if(status != 0) {
+    printf("status not zero %d\n", status);
+    exit(1);
+  }
+
+  struct fcgid_state *state = arg;
+  
+  ph_unused_parameter(elapsed);
+  
+  simple_session_1((int) sockfd, state);
+}
 
 // Called each time the session wakes up.
 // The `why` parameter indicates why we were woken up
-static void echo_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
+static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
 {
-  struct echo_state *state = arg;
-  ph_buf_t *buf;
+  struct fcgid_state *state = arg;
 
+  ph_buf_t *buf;
   // If the socket encountered an error, or if the timeout was reached
   // (there's a default timeout, even if we didn't override it), then
   // we tear down the session
@@ -232,6 +218,7 @@ static void echo_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
     // own a reference to the returned buffer and should treat it as
     // a read-only slice.
     buf = ph_sock_read_line(sock);
+    
     if (!buf) {
       // Not available yet, we'll try again later
       return;
@@ -250,63 +237,53 @@ static void echo_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
     // Note that buf includes the trailing CRLF, so our response
     // will implicitly end with CRLF too.
 
-    int sockfd;
-    fcgi_record *h;
-    nvs[0].value = "/home/work/local/httpd/htdocs/ip.php";
-    nvs[18].value = ph_buf_mem(buf);
+    state->remote_sock = sock;
+
+    state->script_name = "/home/work/local/httpd/htdocs/ip.php";
+    state->get = ph_buf_mem(buf);
     
-    fcgi_connect(&sockfd);
+    struct timeval timeout = { 60, 0 };
+
+    ph_socket_t sockfd;
+    ph_sockaddr_t addr;
+    struct addrinfo hints, *ai;
+  
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    if(getaddrinfo(FCGI_SERVER, FCGI_PORT, &hints, &ai)) {
+      return PH_ERR;
+    }
+
+    ph_sockaddr_set_from_addrinfo(&addr, ai);
+
+    ph_nbio_init(0);
     
-    simple_session_1(sockfd, sock);
-    
+    sockfd = ph_socket_for_addr(&addr, SOCK_STREAM, PH_SOCK_CLOEXEC);
+    ph_socket_connect(sockfd, &addr, &timeout, connected, state);
+
     ph_stm_printf(sock->stream, "You said [%d]: ", state->num_lines);
     ph_stm_write(sock->stream, ph_buf_mem(buf), ph_buf_len(buf), NULL);
 
-    
-    close(sockfd);
-    
-    return 0;
-    
-
     // We're done with buf, so we must release it
     ph_buf_delref(buf);
+    
+    return 0;
   }
-}
-
-static void done_handshake(ph_sock_t *sock, int res)
-{
-  ph_unused_parameter(sock);
-  ph_log(PH_LOG_ERR, "handshake completed with res=%d", res);
 }
 
 // Called each time the listener has accepted a client connection
 static void acceptor(ph_listener_t *lstn, ph_sock_t *sock)
 {
   ph_unused_parameter(lstn);
-
-  // Allocate an echo_state instance and stash it.
+  // Allocate an fcgid_state instance and stash it.
   // This is set to be zero'd on creation and will show up as the
-  // `arg` parameter in `echo_processor`
+  // `arg` parameter in `fcgid_processor`
   sock->job.data = ph_mem_alloc(mt_state);
-
   // Tell it how to dispatch
-  sock->callback = echo_processor;
-
+  sock->callback = fcgid_processor;
   ph_log(PH_LOG_ERR, "accepted `P{sockaddr:%p}", (void*)&sock->peername);
-
-  if (enable_ssl) {
-    SSL_CTX *ctx = SSL_CTX_new(SSLv23_server_method());
-    SSL *ssl;
-
-    SSL_CTX_set_cipher_list(ctx, "ALL");
-    SSL_CTX_use_RSAPrivateKey_file(ctx, "examples/server.pem", SSL_FILETYPE_PEM);
-    SSL_CTX_use_certificate_file(ctx, "examples/server.pem", SSL_FILETYPE_PEM);
-    SSL_CTX_set_options(ctx, SSL_OP_ALL);
-    ssl = SSL_new(ctx);
-
-    ph_sock_openssl_enable(sock, ssl, false, done_handshake);
-  }
-
   ph_sock_enable(sock, true);
 }
 
@@ -318,11 +295,13 @@ int main(int argc, char **argv)
   ph_sockaddr_t addr;
   ph_listener_t *lstn;
   bool use_v4 = false;
+  ph_variant_t* conf;
+  ph_variant_t* conf_node;
 
   // Must be called prior to calling any other phenom functions
   ph_library_init();
 
-  while ((c = getopt(argc, argv, "p:l:4s")) != -1) {
+  while ((c = getopt(argc, argv, "p:l:c:4s")) != -1) {
     switch (c) {
       case '4':
         use_v4 = true;
@@ -336,6 +315,9 @@ int main(int argc, char **argv)
       case 'p':
         portno = atoi(optarg);
         break;
+      case 'c':
+        // ph_config_load_config_file(optarg);
+        break;
       default:
         ph_fdprintf(STDERR_FILENO,
             "Invalid parameters\n"
@@ -347,7 +329,11 @@ int main(int argc, char **argv)
         exit(EX_USAGE);
     }
   }
-
+  
+  // conf = ph_config_get_global();
+  /* conf_node = ph_var_jsonpath_get(conf, "$.SERVER.PORT"); */
+  /* printf("\t%d", conf_node->type); */
+  
   if (enable_ssl) {
     ph_library_init_openssl();
   }
@@ -367,7 +353,7 @@ int main(int argc, char **argv)
   mt_state = ph_memtype_register(&mt_state_def);
 
   // Optional config file for tuning internals
-  ph_config_load_config_file("/path/to/my/config.json");
+  ph_config_load_config_file("/home/work/git/fcgi-client/conf.json");
 
   // Enable the non-blocking IO manager
   ph_nbio_init(0);
@@ -382,7 +368,7 @@ int main(int argc, char **argv)
   // https://github.com/facebook/libphenom/blob/master/corelib/debug_console.c
   ph_debug_console_start("/tmp/phenom-debug-console");
 
-  lstn = ph_listener_new("echo-server", acceptor);
+  lstn = ph_listener_new("fcgid-server", acceptor);
   ph_listener_bind(lstn, &addr);
   ph_listener_enable(lstn, true);
 

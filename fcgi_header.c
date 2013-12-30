@@ -57,8 +57,9 @@ fcgi_record* fcgi_record_create()
 {
     fcgi_record* tmp = (fcgi_record *) malloc(sizeof(fcgi_record));
     tmp->header = (fcgi_header *) calloc(sizeof(fcgi_header), 1);
-    tmp->next = NULL;
-    tmp->state = 0;
+    tmp->next   = NULL;
+    tmp->offset = 0;
+    tmp->state  = 0;
     return tmp;
 }
 
