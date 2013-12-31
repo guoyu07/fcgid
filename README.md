@@ -11,9 +11,11 @@ Or You can use CMake:
 
 `mkdir build`
 
-`cd buiild`
+`cd build`
 
-`cmake .. -DLIBPHENOM_PATH=/path/to/libphenom`
+`cmake .. -DLIBPHENOM_PATH=/path/to/libphenom -DCMAKE_INSTALL_PREFIX=/path/to/install`
+
+`make`
 
 Reference
 ---------
