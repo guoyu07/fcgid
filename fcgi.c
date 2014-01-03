@@ -25,7 +25,7 @@
 #define FCGI_PORT "8888"
 #define MAXDATASIZE 1000
 
-#define N_NameValue 27
+#define N_NameValue 28
 fcgi_name_value nvs[N_NameValue] = {
 {"SCRIPT_FILENAME", "/home/work/local/httpd/htdocs/ip.php"},
 {"SCRIPT_NAME", "/test.php"},
@@ -46,10 +46,11 @@ fcgi_name_value nvs[N_NameValue] = {
 {"REMOTE_ADDR", "127.0.0.1"},
 {"PATH_INFO", "no value"},
 {"QUERY_STRING", "way=get"},
-{"REQUEST_METHOD", "GET"},
+{"REQUEST_METHOD", "POST"},
 {"REDIRECT_STATUS", "200"},
 {"SERVER_PROTOCOL", "HTTP/1.1"},
 {"HTTP_HOST", "localhost:9000"},
+{"CONTENT_LENGTH", ""},
 {"HTTP_CONNECTION", "keep-alive"},
 {"HTTP_USER_AGENT", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/535.11 (KHTML, like Gecko) Chrome/17.0.963.83 Safari/535.11"},
 {"HTTP_ACCEPT", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
@@ -60,10 +61,16 @@ static bool enable_ssl = false;
 
 // fcgid connected session will have one of these structs associated with it
 struct fcgid_state {
-  int num_lines;
   ph_sock_t *remote_sock;
+  char      *remote_addr;
+  char      *remote_port;
+  
+  int   fcgi_req_id;
+  char *data;
+  
+  char *document_root;
+  char *request_uri;
   char *script_name;
-  char *get;
 };
 
 // We'll track our state instances using our own typed memory.
@@ -75,21 +82,24 @@ static struct ph_memtype_def mt_state_def = {
   "fcgid", "fcgid_state", sizeof(struct fcgid_state), PH_MEM_FLAGS_ZERO
 };
 
-void simple_session_1(int sockfd, void *data)
+void simple_session(int sockfd, void *data)
 {
     uint16_t req_id;
     uint16_t len=0;
     int nb, i;
     unsigned char *p, *buf, *rbuf;
     fcgi_header* head;
+    fcgi_header* post_head;
+    
     fcgi_begin_request* begin_req = create_begin_request(req_id);
 
     struct fcgid_state *state = data;    
 
-    req_id = state->num_lines;
+    char *post = "data=hello";
     
-    // nvs[0].value = state->script_name;
-    // nvs[18].value = state->get;
+    req_id = state->fcgi_req_id;
+    nvs[0].value  = state->script_name;
+    nvs[18].value = state->data;
     
     rbuf = malloc(BUF_SIZE);
     buf  = malloc(BUF_SIZE);
@@ -125,6 +135,23 @@ void simple_session_1(int sockfd, void *data)
 
     serialize(p, head, sizeof(fcgi_header));
     p += sizeof(fcgi_header);
+
+    len = strlen(post);
+    post_head = create_header(FCGI_STDIN, req_id);
+    post_head->content_len_lo = BYTE_0(len);
+    post_head->content_len_hi = BYTE_1(len);
+
+    serialize(p, post_head, sizeof(fcgi_header));
+    p += sizeof(fcgi_header);
+    serialize(p, post, len);
+    p += len;
+
+
+    post_head->content_len_lo = 0;
+    post_head->content_len_hi = 0;
+
+    serialize(p, post_head, sizeof(fcgi_header));
+    p += sizeof(fcgi_header);    
 
     printf("Total bytes sending %ld\n", p-buf);
     print_bytes(buf, p-buf);
@@ -169,7 +196,7 @@ static void connected(ph_socket_t sockfd, const ph_sockaddr_t *addr,
                       struct timeval *elapsed, void *arg)
 {
   
-  if(sockfd != -1 && status ==0) {
+  if(sockfd != -1 && status == 0) {
     printf("connected successfuly...\n");
   }
   
@@ -184,10 +211,8 @@ static void connected(ph_socket_t sockfd, const ph_sockaddr_t *addr,
   }
 
   struct fcgid_state *state = arg;
-  
   ph_unused_parameter(elapsed);
-  
-  simple_session_1((int) sockfd, state);
+  simple_session((int) sockfd, state);
 }
 
 // Called each time the session wakes up.
@@ -220,6 +245,7 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
     // own a reference to the returned buffer and should treat it as
     // a read-only slice.
     buf = ph_sock_read_line(sock);
+    // buf = ph_sock_read_bytes_exact(sock, 8192);
     
     if (!buf) {
       // Not available yet, we'll try again later
@@ -227,7 +253,7 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
     }
 
     // We got a line; update our state
-    state->num_lines++;
+    state->fcgi_req_id++;
 
     // Send our response.  The data is buffered and automatically sent
     // to the client as it becomes writable, so we don't need to handle
@@ -242,7 +268,7 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
     state->remote_sock = sock;
 
     state->script_name = "/home/work/local/httpd/htdocs/ip.php";
-    state->get = ph_buf_mem(buf);
+    state->data = ph_buf_mem(buf);
     
     struct timeval timeout = { 60, 0 };
 
@@ -265,7 +291,7 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
     sockfd = ph_socket_for_addr(&addr, SOCK_STREAM, PH_SOCK_CLOEXEC);
     ph_socket_connect(sockfd, &addr, &timeout, connected, state);
 
-    ph_stm_printf(sock->stream, "You said [%d]: ", state->num_lines);
+    ph_stm_printf(sock->stream, "You said [%d]: ", state->fcgi_req_id);
     ph_stm_write(sock->stream, ph_buf_mem(buf), ph_buf_len(buf), NULL);
 
     // We're done with buf, so we must release it
@@ -287,18 +313,25 @@ static void acceptor(ph_listener_t *lstn, ph_sock_t *sock)
   sock->callback = fcgid_processor;
   ph_log(PH_LOG_ERR, "accepted `P{sockaddr:%p}", (void*)&sock->peername);
   ph_sock_enable(sock, true);
+  
+  PH_STRING_DECLARE_STACK(remote_addr, 128);
+  ph_sockaddr_print(&sock->peername, &remote_addr, true);
+  ph_string_append_buf(&remote_addr, "\0", 1);
+  printf("IP address is: %s \n", remote_addr.buf);
 }
 
 int main(int argc, char **argv)
 {
   int c;
-  uint16_t portno = 8080;
+  uint16_t portno;
   char *addrstring = NULL;
   ph_sockaddr_t addr;
   ph_listener_t *lstn;
   bool use_v4 = false;
-  ph_variant_t* conf;
-  ph_variant_t* conf_node;
+  
+  ph_string_t* conf_server_host;
+  ph_string_t* conf_server_host_name;
+  char *hostname;
 
   // Must be called prior to calling any other phenom functions
   ph_library_init();
@@ -318,25 +351,40 @@ int main(int argc, char **argv)
         portno = atoi(optarg);
         break;
       case 'c':
-        // ph_config_load_config_file(optarg);
+        ph_config_load_config_file(optarg);
         break;
       default:
         ph_fdprintf(STDERR_FILENO,
             "Invalid parameters\n"
             " -4          - interpret address as an IPv4 address\n"
             " -l ADDRESS  - which address to listen on\n"
+            " -c CONFIG   - which address to listen on\n"                    
             " -p PORTNO   - which port to listen on\n"
             " -s          - enable SSL\n"
         );
         exit(EX_USAGE);
     }
   }
+
+  // host address
+  conf_server_host = ph_config_query_string_cstr("$.SERVER.HOST", NULL);
+  addrstring = conf_server_host->buf;
+
+  // hostname
+  conf_server_host_name = ph_config_query_string_cstr("$.SERVER.NAME", NULL);
+  hostname = conf_server_host_name->buf;
+
+  // port number
+  portno = ph_config_query_int("$.SERVER.PORT", 8080);
+
+  // enable ssl?
+  enable_ssl = (bool) ph_config_query_int("$.SERVER.ENABLE_SSL", 0);
   
-  // conf = ph_config_get_global();
-  /* conf_node = ph_var_jsonpath_get(conf, "$.SERVER.PORT"); */
-  /* printf("\t%d", conf_node->type); */
+  // printf("%s\n", conf_host->buf);
+  // printf("%d-true: %d-false: %d\n", portno, true, false);
   
   if (enable_ssl) {
+    ph_log(PH_LOG_ERR, "connection will use SSL");
     ph_library_init_openssl();
   }
 
@@ -344,18 +392,15 @@ int main(int argc, char **argv)
   if ((use_v4 && ph_sockaddr_set_v4(&addr, addrstring, portno) != PH_OK) ||
       (!use_v4 && ph_sockaddr_set_v6(&addr, addrstring, portno) != PH_OK)) {
     ph_fdprintf(STDERR_FILENO,
-        "Invalid address [%s]:%d",
-        addrstring ? addrstring : "*",
-        portno
+                "Invalid address [%s]:%d",
+                addrstring ? addrstring : "*",
+                portno
     );
     exit(EX_USAGE);
   }
 
   // Register our memtype
   mt_state = ph_memtype_register(&mt_state_def);
-
-  // Optional config file for tuning internals
-  ph_config_load_config_file("/home/work/git/fcgi-client/conf.json");
 
   // Enable the non-blocking IO manager
   ph_nbio_init(0);
@@ -370,7 +415,7 @@ int main(int argc, char **argv)
   // https://github.com/facebook/libphenom/blob/master/corelib/debug_console.c
   ph_debug_console_start("/tmp/phenom-debug-console");
 
-  lstn = ph_listener_new("fcgid-server", acceptor);
+  lstn = ph_listener_new(hostname, acceptor);
   ph_listener_bind(lstn, &addr);
   ph_listener_enable(lstn, true);
 

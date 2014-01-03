@@ -3,12 +3,12 @@
     "NAME":"BULLSOFT_FCGI_SERVER",
     "HOST":"0.0.0.0",
     "PORT":8080,
-    "ENABLE_SSL":true
+    "ENABLE_SSL":1
 },
 "DOCUMENT_ROOT":"/home/work/local/httpd/htdocs/",
 "FCGI_SERVER":
     [
-        {"HOST":"", "PORT":""},
-        {"HOST":"", "PORT":""}
+        {"HOST":"10.48.25.160", "PORT":"8888"},
+        {"HOST":"10.48.25.160", "PORT":"9000"}
     ]
 }
