@@ -25,7 +25,7 @@
 #define FCGI_PORT "8888"
 #define MAXDATASIZE 1000
 
-#define N_NameValue 28
+#define N_NameValue 29
 fcgi_name_value nvs[N_NameValue] = {
 {"SCRIPT_FILENAME", "/home/work/local/httpd/htdocs/ip.php"},
 {"SCRIPT_NAME", "/test.php"},
@@ -55,6 +55,7 @@ fcgi_name_value nvs[N_NameValue] = {
 {"HTTP_USER_AGENT", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/535.11 (KHTML, like Gecko) Chrome/17.0.963.83 Safari/535.11"},
 {"HTTP_ACCEPT", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
 {"HTTP_ACCEPT_LANGUAGE", "en-US,en;q=0.8"},
+{"CONTENT_TYPE", "application/x-www-form-urlencoded"},
 };
 
 static bool enable_ssl = false;
