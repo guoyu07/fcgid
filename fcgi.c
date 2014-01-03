@@ -82,12 +82,24 @@ static struct ph_memtype_def mt_state_def = {
   "fcgid", "fcgid_state", sizeof(struct fcgid_state), PH_MEM_FLAGS_ZERO
 };
 
+static inline uint16_t get_num_size(uint16_t i)
+{
+    uint16_t n = 0;
+
+    do {
+        i /= 10;
+        n++;
+    } while (i > 0);
+
+    return n;
+}
+
 void simple_session(int sockfd, void *data)
 {
     uint16_t req_id;
-    uint16_t len=0;
+    uint16_t len = 0;
     int nb, i;
-    unsigned char *p, *buf, *rbuf;
+    unsigned char *p, *buf, *rbuf, *content_length;
     fcgi_header* head;
     fcgi_header* post_head;
     
@@ -96,9 +108,14 @@ void simple_session(int sockfd, void *data)
     struct fcgid_state *state = data;    
 
     char *post = "data=hello";
-    
+
+    len = strlen(post);
+    content_length = malloc(get_num_size(len));
+    sprintf(content_length, "%d", len);
+
     req_id = state->fcgi_req_id;
     nvs[0].value  = state->script_name;
+    nvs[23].value = content_length;
     nvs[18].value = state->data;
     
     rbuf = malloc(BUF_SIZE);
