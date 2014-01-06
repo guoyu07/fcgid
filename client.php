@@ -36,7 +36,7 @@ if ($result < 0) {
     echo "OK.\n";
 }
  
-$in = "way=get\r\n";
+$in = '{"request_uri":"/test.php?way=get", "post":"foo=1&bar=2"}'."\r\n";
 
 $out = '';
  

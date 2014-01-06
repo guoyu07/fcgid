@@ -19,6 +19,7 @@
 #include "phenom/printf.h"
 #include "phenom/listener.h"
 #include "phenom/socket.h"
+#include "phenom/json.h"
 
 #define BUF_SIZE 5000
 #define FCGI_SERVER "10.48.25.160"
@@ -62,16 +63,17 @@ static bool enable_ssl = false;
 
 // fcgid connected session will have one of these structs associated with it
 struct fcgid_state {
+
   ph_sock_t *remote_sock;
-  char      *remote_addr;
-  char      *remote_port;
-  
+
   int   fcgi_req_id;
-  char *data;
   
-  char *document_root;
-  char *request_uri;
-  char *script_name;
+  ph_string_t    *remote_addr;
+  ph_string_t    *remote_port;
+  
+  ph_string_t *document_root;
+  ph_string_t *request_uri;
+  ph_string_t *post;
 };
 
 // We'll track our state instances using our own typed memory.
@@ -86,14 +88,71 @@ static struct ph_memtype_def mt_state_def = {
 static inline uint16_t get_num_size(uint16_t i)
 {
     uint16_t n = 0;
-
     do {
         i /= 10;
         n++;
     } while (i > 0);
-
     return n;
 }
+
+char *str_query_string(char *s)
+{
+  char *p = strchr(s, '?');
+  if(p) {
+    return strdup(p+1);
+  }
+  return NULL;
+}
+
+char *str_request_path(char *s)
+{
+  char *path = strdup(s);
+  char *p = strchr(s, '?');
+  if(p) {
+    strncpy(path, s, p-s-1);
+    path[p-s] = '\0';
+    return path;
+  }
+  return s;
+}
+
+static inline char *strrstr(char *s1, char *s2)
+{
+  char *sc1, *sc2, *psc1, *ps1;
+
+  if (*s2 == '\0')
+    return((char *)s1);
+    
+  ps1 = s1 + strlen(s1);
+  
+  while(ps1 != s1) {
+    --ps1;
+    for (psc1 = ps1, sc2 = s2; ; )
+      if (*(psc1++) != *(sc2++))
+        break;
+      else if (*sc2 == '\0')
+        return ((char *)ps1);
+  }
+  return ((char *)NULL);
+}
+
+/* void name_value(ph_ht_t *ptr_ht, void *data, bool is_post = false) */
+/* { */
+/*   ph_memtype_t name_value_hash_mem; */
+/*   ph_memtype_t str_hd_mem; */
+/*   struct fcgid_state *state = data; */
+
+/*   ph_string_make_empty(str_hd_mem, ph_string_len(state->document_root) + ph_string_len(state->request)); */
+  
+/*   ph_ht_init(&ptr_ht, 1, &ph_ht_string_key_def, &ph_ht_string_val_def); */
+
+/*   ph_string_t *key = ph_string_make_cstr(name_value_hash_mem, "SCRIPT_FILENAME"); */
+/*   ph_string_t *val = ph_string_make_cstr(name_value_hash_mem, "val"); */
+/*   ph_ht_set(ptr_ht, &key, &val); */
+/*   ph_string_delref(key); */
+/*   ph_string_delref(val); */
+    
+/* } */
 
 void simple_session(int sockfd, void *data)
 {
@@ -108,16 +167,30 @@ void simple_session(int sockfd, void *data)
 
     struct fcgid_state *state = data;    
 
-    char *post = "data=hello";
+    char *post = state->post->buf;
 
     len = strlen(post);
     content_length = malloc(get_num_size(len));
     sprintf(content_length, "%d", len);
 
     req_id = state->fcgi_req_id;
-    nvs[0].value  = state->script_name;
+
+    // printf("request path: %s\n", str_request_path(state->request_uri->buf));
+
+    PH_STRING_DECLARE_STACK(script_filename, 128);
+    ph_string_printf(&script_filename, "%s", state->document_root->buf);    
+    ph_string_append_cstr(&script_filename, str_request_path(state->request_uri->buf));
+
+    // printf("script name: %s\n", script_filename.buf);
+    
+    nvs[0].value = script_filename.buf;
+    nvs[2].value = state->document_root->buf;
+    nvs[3].value = state->request_uri->buf;
+
+    // nvs[18].value = state->data;
+    nvs[18].value = str_query_string(state->request_uri->buf);
     nvs[23].value = content_length;
-    nvs[18].value = state->data;
+
     
     rbuf = malloc(BUF_SIZE);
     buf  = malloc(BUF_SIZE);
@@ -164,7 +237,6 @@ void simple_session(int sockfd, void *data)
     serialize(p, post, len);
     p += len;
 
-
     post_head->content_len_lo = 0;
     post_head->content_len_hi = 0;
 
@@ -173,6 +245,9 @@ void simple_session(int sockfd, void *data)
 
     printf("Total bytes sending %ld\n", p-buf);
     print_bytes(buf, p-buf);
+
+    // ph_ht_t ht;
+    // Declare a map from ph_string_t* -> ph_string_t*
 
     if (send(sockfd, buf, p-buf, 0) == -1) {
       perror("send");
@@ -192,14 +267,6 @@ void simple_session(int sockfd, void *data)
     }
 
     close(sockfd);
-    
-    for(rec=rlst; rec!=NULL; rec=rec->next)
-    {
-      /*if(rec->header->type == FCGI_STDOUT)*/
-      /*printf("PADD<%d>", rec->header->padding_len);*/
-      /*printf("%d\n", rec->length);*/
-      /*for(i=0;i < rec->length; i++) fprintf(stdout, "%c", ((uchar *)rec->content)[i]);*/
-    }
 }
 
 static void done_handshake(ph_sock_t *sock, int res)
@@ -238,8 +305,15 @@ static void connected(ph_socket_t sockfd, const ph_sockaddr_t *addr,
 static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
 {
   struct fcgid_state *state = arg;
+  char *raw_data;
+  ph_variant_t *data;
 
+  ph_variant_t *request_uri_var;
+  ph_variant_t *post_var;
+  
+  ph_var_err_t err;
   ph_buf_t *buf;
+  
   // If the socket encountered an error, or if the timeout was reached
   // (there's a default timeout, even if we didn't override it), then
   // we tear down the session
@@ -251,6 +325,9 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
     return;
   }
 
+  state->remote_sock = sock;
+  state->document_root = ph_config_query_string_cstr("$.DOCUMENT_ROOT", NULL);
+  
   // We loop because echo_processor is only triggered by newly arriving
   // data or events from the kernel.  If we have data buffered and only
   // partially consume it, we won't get woken up until the next data
@@ -263,16 +340,30 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
     // own a reference to the returned buffer and should treat it as
     // a read-only slice.
     buf = ph_sock_read_line(sock);
-    // buf = ph_sock_read_bytes_exact(sock, 8192);
     
     if (!buf) {
       // Not available yet, we'll try again later
       return;
     }
 
-    // We got a line; update our state
-    state->fcgi_req_id++;
+    if(state->fcgi_req_id > 1000) {
+      state->fcgi_req_id = 0;
+    }  else {
+      state->fcgi_req_id++;
+    }
 
+    raw_data = (char *) ph_buf_mem(buf);
+    data = ph_json_load_cstr(raw_data, PH_JSON_DECODE_ANY, &err);
+
+    request_uri_var = ph_var_object_get_cstr(data, "request_uri");
+    state->request_uri = ph_var_string_val(request_uri_var);
+
+    post_var = ph_var_object_get_cstr(data, "post");
+    state->post = ph_var_string_val(post_var);
+
+    // printf("raw data: %s\n", raw_data);
+    // printf("request uri: %s\n", current_str->buf);
+    
     // Send our response.  The data is buffered and automatically sent
     // to the client as it becomes writable, so we don't need to handle
     // partial writes or EAGAIN here.
@@ -283,11 +374,6 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
     // Note that buf includes the trailing CRLF, so our response
     // will implicitly end with CRLF too.
 
-    state->remote_sock = sock;
-
-    state->script_name = "/home/work/local/httpd/htdocs/ip.php";
-    state->data = ph_buf_mem(buf);
-    
     struct timeval timeout = { 60, 0 };
 
     ph_socket_t sockfd;
@@ -309,12 +395,12 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
     sockfd = ph_socket_for_addr(&addr, SOCK_STREAM, PH_SOCK_CLOEXEC);
     ph_socket_connect(sockfd, &addr, &timeout, connected, state);
 
-    ph_stm_printf(sock->stream, "You said [%d]: ", state->fcgi_req_id);
-    ph_stm_write(sock->stream, ph_buf_mem(buf), ph_buf_len(buf), NULL);
+    // ph_stm_printf(sock->stream, "You said [%d]: ", state->fcgi_req_id);
+    // ph_stm_write(sock->stream, ph_buf_mem(buf), ph_buf_len(buf), NULL);
 
     // We're done with buf, so we must release it
     ph_buf_delref(buf);
-    
+    ph_var_delref(data);
     return 0;
   }
 }
@@ -347,8 +433,8 @@ int main(int argc, char **argv)
   ph_listener_t *lstn;
   bool use_v4 = false;
   
-  ph_string_t* conf_server_host;
-  ph_string_t* conf_server_host_name;
+  ph_string_t *conf_server_host;
+  ph_string_t *conf_server_host_name;
   char *hostname;
 
   // Must be called prior to calling any other phenom functions
