@@ -104,6 +104,15 @@ char *str_query_string(char *s)
   return NULL;
 }
 
+char *str_ip_port(char *s)
+{
+  char *p = strchr(s, ':');
+  if(p) {
+    return strdup(p+1);
+  }
+  return NULL;
+}
+
 char *str_request_path(char *s)
 {
   char *path = strdup(s);
@@ -191,7 +200,6 @@ void simple_session(int sockfd, void *data)
     nvs[18].value = str_query_string(state->request_uri->buf);
     nvs[23].value = content_length;
 
-    
     rbuf = malloc(BUF_SIZE);
     buf  = malloc(BUF_SIZE);
     p = buf;
@@ -305,7 +313,9 @@ static void connected(ph_socket_t sockfd, const ph_sockaddr_t *addr,
 static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
 {
   struct fcgid_state *state = arg;
-  char *raw_data;
+  struct timeval timeout = { 60, 0 };
+
+  char *raw_data = NULL;
   ph_variant_t *data;
 
   ph_variant_t *request_uri_var;
@@ -313,6 +323,8 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
   
   ph_var_err_t err;
   ph_buf_t *buf;
+
+  ph_buf_t *sub_buf;
   
   // If the socket encountered an error, or if the timeout was reached
   // (there's a default timeout, even if we didn't override it), then
@@ -339,21 +351,37 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
     // line was larger than our buffer segment size).  Either way, we
     // own a reference to the returned buffer and should treat it as
     // a read-only slice.
+    
+    // buf = ph_buf_new(8192);
+    // ph_buf_set(buf, 0, 0, 8192);
     buf = ph_sock_read_line(sock);
+    
+    // buf = ph_sock_read_record(sock, "\r\n\r\n", 4);
     
     if (!buf) {
       // Not available yet, we'll try again later
       return;
     }
 
+    sub_buf = ph_buf_new(ph_buf_len(buf));
+    ph_buf_copy(buf, sub_buf, 0, ph_buf_len(buf), 0);
+      
     if(state->fcgi_req_id > 1000) {
       state->fcgi_req_id = 0;
-    }  else {
+    } else {
       state->fcgi_req_id++;
     }
 
-    raw_data = (char *) ph_buf_mem(buf);
+    raw_data = ph_buf_mem(sub_buf);
+
+    printf("raw data: %s\n", raw_data);
+    
     data = ph_json_load_cstr(raw_data, PH_JSON_DECODE_ANY, &err);
+
+    /* if(!data) { */
+    /*   ph_log(PH_LOG_ERR, "json decode error: %s", err.text); */
+    /*   return; */
+    /* } */
 
     request_uri_var = ph_var_object_get_cstr(data, "request_uri");
     state->request_uri = ph_var_string_val(request_uri_var);
@@ -361,7 +389,6 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
     post_var = ph_var_object_get_cstr(data, "post");
     state->post = ph_var_string_val(post_var);
 
-    // printf("raw data: %s\n", raw_data);
     // printf("request uri: %s\n", current_str->buf);
     
     // Send our response.  The data is buffered and automatically sent
@@ -373,8 +400,6 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
 
     // Note that buf includes the trailing CRLF, so our response
     // will implicitly end with CRLF too.
-
-    struct timeval timeout = { 60, 0 };
 
     ph_socket_t sockfd;
     ph_sockaddr_t addr;
@@ -400,7 +425,12 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
 
     // We're done with buf, so we must release it
     ph_buf_delref(buf);
+    ph_buf_delref(sub_buf);
+    
     ph_var_delref(data);
+
+    raw_data = NULL;
+    
     return 0;
   }
 }
@@ -418,10 +448,10 @@ static void acceptor(ph_listener_t *lstn, ph_sock_t *sock)
   ph_log(PH_LOG_ERR, "accepted `P{sockaddr:%p}", (void*)&sock->peername);
   ph_sock_enable(sock, true);
   
-  PH_STRING_DECLARE_STACK(remote_addr, 128);
-  ph_sockaddr_print(&sock->peername, &remote_addr, true);
-  ph_string_append_buf(&remote_addr, "\0", 1);
-  printf("IP address is: %s \n", remote_addr.buf);
+  // PH_STRING_DECLARE_STACK(remote_addr, 128);
+  // ph_sockaddr_print(&sock->peername, &remote_addr, true);
+  // ph_string_append_buf(&remote_addr, "\0", 1);
+  // printf("IP address is: %s \n", remote_addr.buf);
 }
 
 int main(int argc, char **argv)
@@ -431,7 +461,7 @@ int main(int argc, char **argv)
   char *addrstring = NULL;
   ph_sockaddr_t addr;
   ph_listener_t *lstn;
-  bool use_v4 = false;
+  bool use_v4 = true;
   
   ph_string_t *conf_server_host;
   ph_string_t *conf_server_host_name;
