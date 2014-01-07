@@ -1,5 +1,4 @@
 #include "fcgi_header.h"
-
 #include <unistd.h>
 #include <errno.h>
 #include <netdb.h>
@@ -28,11 +27,11 @@
 
 #define N_NameValue 29
 fcgi_name_value nvs[N_NameValue] = {
-{"SCRIPT_FILENAME", "/home/work/local/httpd/htdocs/ip.php"},
-{"SCRIPT_NAME", "/test.php"},
-{"DOCUMENT_ROOT", "/home/abhigna/"},
-{"REQUEST_URI", "/test.php"},
-{"PHP_SELF", "/test.php"},
+{"SCRIPT_FILENAME", ""},
+{"SCRIPT_NAME", ""},
+{"DOCUMENT_ROOT", ""},
+{"REQUEST_URI", ""},
+{"PHP_SELF", ""},
 {"TERM", "linux"},
 {"PATH", ""},
 {"PHP_FCGI_CHILDREN", "2"},
@@ -44,9 +43,9 @@ fcgi_name_value nvs[N_NameValue] = {
 {"SERVER_PORT", FCGI_PORT},
 {"SERVER_ADDR", FCGI_SERVER},
 {"REMOTE_PORT", ""},
-{"REMOTE_ADDR", "127.0.0.1"},
+{"REMOTE_ADDR", ""},
 {"PATH_INFO", "no value"},
-{"QUERY_STRING", "way=get"},
+{"QUERY_STRING", ""},
 {"REQUEST_METHOD", "POST"},
 {"REDIRECT_STATUS", "200"},
 {"SERVER_PROTOCOL", "HTTP/1.1"},
@@ -68,8 +67,8 @@ struct fcgid_state {
 
   int   fcgi_req_id;
   
-  ph_string_t    *remote_addr;
-  ph_string_t    *remote_port;
+  char *remote_addr;
+  char *remote_port;
   
   ph_string_t *document_root;
   ph_string_t *request_uri;
@@ -104,6 +103,15 @@ char *str_query_string(char *s)
   return NULL;
 }
 
+char *str_basename(char *s)
+{
+  char *p = strrchr(s, '/');
+  if (p) {
+     return strdup(p+1);
+   }
+  return NULL;
+}
+
 char *str_ip_port(char *s)
 {
   char *p = strchr(s, ':');
@@ -111,6 +119,18 @@ char *str_ip_port(char *s)
     return strdup(p+1);
   }
   return NULL;
+}
+
+char *str_ip_addr(char *s)
+{
+  char *path = strdup(s);
+  char *p = strchr(s, ']');
+  if(p) {
+    strncpy(path, s+1, p-s-1);
+    path[p-s-1] = '\0';
+    return path;
+  }
+  return s;
 }
 
 char *str_request_path(char *s)
@@ -184,18 +204,22 @@ void simple_session(int sockfd, void *data)
 
     req_id = state->fcgi_req_id;
 
-    // printf("request path: %s\n", str_request_path(state->request_uri->buf));
-
     PH_STRING_DECLARE_STACK(script_filename, 128);
     ph_string_printf(&script_filename, "%s", state->document_root->buf);    
     ph_string_append_cstr(&script_filename, str_request_path(state->request_uri->buf));
 
-    // printf("script name: %s\n", script_filename.buf);
-    
+    printf("request uri: %s\n", state->request_uri->buf);
+    printf("script filename: %s\n", script_filename.buf);
+    printf("php self name: %s\n", str_basename(script_filename.buf));
+        
     nvs[0].value = script_filename.buf;
     nvs[2].value = state->document_root->buf;
     nvs[3].value = state->request_uri->buf;
-
+    nvs[4].value = str_basename(script_filename.buf);
+    
+    nvs[15].value = state->remote_port;
+    nvs[16].value = state->remote_addr;
+    
     // nvs[18].value = state->data;
     nvs[18].value = str_query_string(state->request_uri->buf);
     nvs[23].value = content_length;
@@ -320,6 +344,9 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
 
   ph_variant_t *request_uri_var;
   ph_variant_t *post_var;
+
+  ph_string_t *request_uri_string;
+  ph_string_t *post_string;
   
   ph_var_err_t err;
   ph_buf_t *buf;
@@ -352,8 +379,6 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
     // own a reference to the returned buffer and should treat it as
     // a read-only slice.
     
-    // buf = ph_buf_new(8192);
-    // ph_buf_set(buf, 0, 0, 8192);
     buf = ph_sock_read_line(sock);
     
     // buf = ph_sock_read_record(sock, "\r\n\r\n", 4);
@@ -363,8 +388,11 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
       return;
     }
 
-    sub_buf = ph_buf_new(ph_buf_len(buf));
-    ph_buf_copy(buf, sub_buf, 0, ph_buf_len(buf), 0);
+    sub_buf = ph_buf_new(ph_buf_len(buf)-1);
+    // minus 2: \r\n
+    ph_buf_copy(buf, sub_buf, 0, ph_buf_len(buf)-2, 0);
+    // set last with \0
+    ph_buf_set(sub_buf, '\0', ph_buf_len(buf)-2, 1);
       
     if(state->fcgi_req_id > 1000) {
       state->fcgi_req_id = 0;
@@ -373,7 +401,7 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
     }
 
     raw_data = ph_buf_mem(sub_buf);
-
+    
     printf("raw data: %s\n", raw_data);
     
     data = ph_json_load_cstr(raw_data, PH_JSON_DECODE_ANY, &err);
@@ -384,12 +412,25 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
     /* } */
 
     request_uri_var = ph_var_object_get_cstr(data, "request_uri");
-    state->request_uri = ph_var_string_val(request_uri_var);
-
+    request_uri_string = ph_var_string_val(request_uri_var);
+    ph_string_addref(request_uri_string);    
+    ph_string_append_buf(request_uri_string, "\0", 1);
+    state->request_uri = request_uri_string;
+    
     post_var = ph_var_object_get_cstr(data, "post");
-    state->post = ph_var_string_val(post_var);
+    post_string = ph_var_string_val(post_var);
+    ph_string_addref(post_string);
+    ph_string_append_buf(post_string, "\0", 1);
+    state->post = post_string;
 
-    // printf("request uri: %s\n", current_str->buf);
+    PH_STRING_DECLARE_STACK(remote_addr, 128);
+    ph_sockaddr_print(&sock->peername, &remote_addr, true);
+    ph_string_append_buf(&remote_addr, "\0", 1);
+
+    state->remote_addr = str_ip_addr(remote_addr.buf);
+    state->remote_port = str_ip_port(remote_addr.buf);
+    
+    printf("IP is: %s, Port is %s \n", str_ip_addr(remote_addr.buf), str_ip_port(remote_addr.buf));
     
     // Send our response.  The data is buffered and automatically sent
     // to the client as it becomes writable, so we don't need to handle
@@ -426,9 +467,9 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
     // We're done with buf, so we must release it
     ph_buf_delref(buf);
     ph_buf_delref(sub_buf);
-    
     ph_var_delref(data);
-
+    ph_string_delref(request_uri_string);
+    ph_string_delref(post_string);
     raw_data = NULL;
     
     return 0;
@@ -447,11 +488,6 @@ static void acceptor(ph_listener_t *lstn, ph_sock_t *sock)
   sock->callback = fcgid_processor;
   ph_log(PH_LOG_ERR, "accepted `P{sockaddr:%p}", (void*)&sock->peername);
   ph_sock_enable(sock, true);
-  
-  // PH_STRING_DECLARE_STACK(remote_addr, 128);
-  // ph_sockaddr_print(&sock->peername, &remote_addr, true);
-  // ph_string_append_buf(&remote_addr, "\0", 1);
-  // printf("IP address is: %s \n", remote_addr.buf);
 }
 
 int main(int argc, char **argv)
