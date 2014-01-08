@@ -21,8 +21,14 @@
 #include "phenom/json.h"
 
 #define BUF_SIZE 5000
-#define FCGI_SERVER "10.48.25.160"
-#define FCGI_PORT "8888"
+
+// #define FCGI_SERVER "10.48.25.160"
+// #define FCGI_PORT "8888"
+
+// #define FCGI_SERVER "10.48.22.12"
+// #define FCGI_PORT "8990"
+
+
 #define MAXDATASIZE 1000
 
 #define N_NameValue 29
@@ -40,8 +46,8 @@ fcgi_name_value nvs[N_NameValue] = {
 {"SERVER_SOFTWARE", "lighttpd/1.4.29"},
 {"SERVER_NAME", "SimpleServer"},
 {"GATEWAY_INTERFACE", "CGI/1.1"},
-{"SERVER_PORT", FCGI_PORT},
-{"SERVER_ADDR", FCGI_SERVER},
+{"SERVER_PORT", ""},
+{"SERVER_ADDR", ""},
 {"REMOTE_PORT", ""},
 {"REMOTE_ADDR", ""},
 {"PATH_INFO", "no value"},
@@ -62,16 +68,18 @@ static bool enable_ssl = false;
 
 // fcgid connected session will have one of these structs associated with it
 struct fcgid_state {
-
   ph_sock_t *remote_sock;
 
   int   fcgi_req_id;
-  
   char *remote_addr;
   char *remote_port;
+
+  ph_string_t *server_addr;
+  ph_string_t *server_port;
   
   ph_string_t *document_root;
   ph_string_t *request_uri;
+  ph_string_t *script_name;
   ph_string_t *post;
 };
 
@@ -106,8 +114,10 @@ char *str_query_string(char *s)
 char *str_basename(char *s)
 {
   char *p = strrchr(s, '/');
+  char *q;
   if (p) {
-     return strdup(p+1);
+     q = strdup(p+1);
+     return q;
    }
   return NULL;
 }
@@ -143,26 +153,6 @@ char *str_request_path(char *s)
     return path;
   }
   return s;
-}
-
-static inline char *strrstr(char *s1, char *s2)
-{
-  char *sc1, *sc2, *psc1, *ps1;
-
-  if (*s2 == '\0')
-    return((char *)s1);
-    
-  ps1 = s1 + strlen(s1);
-  
-  while(ps1 != s1) {
-    --ps1;
-    for (psc1 = ps1, sc2 = s2; ; )
-      if (*(psc1++) != *(sc2++))
-        break;
-      else if (*sc2 == '\0')
-        return ((char *)ps1);
-  }
-  return ((char *)NULL);
 }
 
 /* void name_value(ph_ht_t *ptr_ht, void *data, bool is_post = false) */
@@ -205,22 +195,31 @@ void simple_session(int sockfd, void *data)
     req_id = state->fcgi_req_id;
 
     PH_STRING_DECLARE_STACK(script_filename, 128);
-    ph_string_printf(&script_filename, "%s", state->document_root->buf);    
-    ph_string_append_cstr(&script_filename, str_request_path(state->request_uri->buf));
-
+    ph_string_printf(&script_filename, "%s", state->document_root->buf);
+    if(*(state->script_name->buf) == '/') {
+      ph_string_append_cstr(&script_filename, state->script_name->buf + 1);
+    } else {
+      ph_string_append_cstr(&script_filename, state->script_name->buf);
+    }
+    ph_string_append_buf(&script_filename, "\0", 1);
+    
     printf("request uri: %s\n", state->request_uri->buf);
+    printf("script name: %s\n", state->script_name->buf);
     printf("script filename: %s\n", script_filename.buf);
     printf("php self name: %s\n", str_basename(script_filename.buf));
         
     nvs[0].value = script_filename.buf;
+    nvs[1].value = state->script_name->buf;
     nvs[2].value = state->document_root->buf;
     nvs[3].value = state->request_uri->buf;
-    nvs[4].value = str_basename(script_filename.buf);
+    nvs[4].value = str_basename(state->script_name->buf);
+
+    nvs[13].value = state->server_port->buf;
+    nvs[14].value = state->server_addr->buf;
     
     nvs[15].value = state->remote_port;
     nvs[16].value = state->remote_addr;
     
-    // nvs[18].value = state->data;
     nvs[18].value = str_query_string(state->request_uri->buf);
     nvs[23].value = content_length;
 
@@ -344,9 +343,11 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
 
   ph_variant_t *request_uri_var;
   ph_variant_t *post_var;
-
+  ph_variant_t *script_name_var;
+  
   ph_string_t *request_uri_string;
   ph_string_t *post_string;
+  ph_string_t *script_name_string;
   
   ph_var_err_t err;
   ph_buf_t *buf;
@@ -413,16 +414,24 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
 
     request_uri_var = ph_var_object_get_cstr(data, "request_uri");
     request_uri_string = ph_var_string_val(request_uri_var);
-    ph_string_addref(request_uri_string);    
     ph_string_append_buf(request_uri_string, "\0", 1);
+    ph_string_addref(request_uri_string);    
     state->request_uri = request_uri_string;
     
     post_var = ph_var_object_get_cstr(data, "post");
     post_string = ph_var_string_val(post_var);
-    ph_string_addref(post_string);
     ph_string_append_buf(post_string, "\0", 1);
+    ph_string_addref(post_string);
     state->post = post_string;
 
+    script_name_var = ph_var_object_get_cstr(data, "script_name");
+    script_name_string = ph_var_string_val(script_name_var);
+    ph_string_append_buf(script_name_string, "\0", 1);
+    ph_string_addref(script_name_string);
+    state->script_name = script_name_string;
+
+    printf("request uri: %s, post_string: %s, script_name: %s\n", request_uri_string->buf, post_string->buf, script_name_string->buf);
+    
     PH_STRING_DECLARE_STACK(remote_addr, 128);
     ph_sockaddr_print(&sock->peername, &remote_addr, true);
     ph_string_append_buf(&remote_addr, "\0", 1);
@@ -442,6 +451,12 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
     // Note that buf includes the trailing CRLF, so our response
     // will implicitly end with CRLF too.
 
+
+    state->server_port = ph_config_query_string_cstr("$.FCGI_SERVER[0].PORT", NULL);
+    state->server_addr = ph_config_query_string_cstr("$.FCGI_SERVER[0].HOST", NULL);
+
+    printf("server addr: %s, server port %s\n", state->server_addr->buf, state->server_port->buf);
+    
     ph_socket_t sockfd;
     ph_sockaddr_t addr;
     struct addrinfo hints, *ai;
@@ -450,7 +465,7 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
 
-    if(getaddrinfo(FCGI_SERVER, FCGI_PORT, &hints, &ai)) {
+    if(getaddrinfo(state->server_addr->buf, state->server_port->buf, &hints, &ai)) {
       return PH_ERR;
     }
 
@@ -461,15 +476,14 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
     sockfd = ph_socket_for_addr(&addr, SOCK_STREAM, PH_SOCK_CLOEXEC);
     ph_socket_connect(sockfd, &addr, &timeout, connected, state);
 
-    // ph_stm_printf(sock->stream, "You said [%d]: ", state->fcgi_req_id);
-    // ph_stm_write(sock->stream, ph_buf_mem(buf), ph_buf_len(buf), NULL);
-
     // We're done with buf, so we must release it
     ph_buf_delref(buf);
     ph_buf_delref(sub_buf);
     ph_var_delref(data);
     ph_string_delref(request_uri_string);
     ph_string_delref(post_string);
+    ph_string_delref(script_name_string);
+    
     raw_data = NULL;
     
     return 0;

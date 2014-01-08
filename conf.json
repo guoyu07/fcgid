@@ -5,10 +5,10 @@
     "PORT":8080,
     "ENABLE_SSL":1
 },
-"DOCUMENT_ROOT":"/home/work/local/httpd/htdocs/",
+"DOCUMENT_ROOT":"/home/users/wuzhiquan/fbiz/framework/htdocs/",    
 "FCGI_SERVER":
     [
-        {"HOST":"10.48.25.160", "PORT":"8888"},
-        {"HOST":"10.48.25.160", "PORT":"9000"}
+        {"HOST":"10.48.22.12", "PORT":"8990"},
+        {"HOST":"10.48.25.160", "PORT":"8888"}
     ]
 }

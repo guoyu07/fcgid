@@ -35,8 +35,16 @@ if ($result < 0) {
 }else {
     echo "OK.\n";
 }
- 
-$in = '{"request_uri":"/ip.php?way=get", "post":"foo=1&bar=2"}'."\r\n";
+
+$data = array(
+    "request_uri" => "/account/info?nestId=21",
+    "script_name" => "/web/mp.php",
+    // "request_uri" => "/ip.php?way=get",
+    // "script_name" => "/ip.php",
+    "post"        => http_build_query(array("foo" => 1, "bar" => 2)),
+);
+
+$in = json_encode($data) . "\r\n";
 
 $out = '';
  
