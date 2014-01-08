@@ -2,6 +2,8 @@ FastCGI Proxy Server
 =====================
 
 facebook libphenom + fastcgi_client + php-fpm
+![fastcgi proxy server](https://raw.github.com/BullSoft/fcgid/master/fcgid.png)
+
 
 Install
 --------
