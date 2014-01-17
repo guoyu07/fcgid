@@ -31,8 +31,7 @@
 
 #define MAXDATASIZE 1000
 
-#define N_NameValue 29
-fcgi_name_value nvs[N_NameValue] = {
+fcgi_name_value nvs[] = {
 {"SCRIPT_FILENAME", ""},
 {"SCRIPT_NAME", ""},
 {"DOCUMENT_ROOT", ""},
@@ -63,6 +62,8 @@ fcgi_name_value nvs[N_NameValue] = {
 {"HTTP_ACCEPT_LANGUAGE", "en-US,en;q=0.8"},
 {"CONTENT_TYPE", "application/x-www-form-urlencoded"},
 };
+
+#define N_NameValue (sizeof(nvs) / sizeof(fcgi_name_value))
 
 static bool enable_ssl = false;
 
@@ -466,7 +467,7 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
     hints.ai_socktype = SOCK_STREAM;
 
     if(getaddrinfo(state->server_addr->buf, state->server_port->buf, &hints, &ai)) {
-      return PH_ERR;
+      return;
     }
 
     ph_sockaddr_set_from_addrinfo(&addr, ai);
@@ -485,8 +486,8 @@ static void fcgid_processor(ph_sock_t *sock, ph_iomask_t why, void *arg)
     ph_string_delref(script_name_string);
     
     raw_data = NULL;
-    
-    return 0;
+
+    return;
   }
 }
 
