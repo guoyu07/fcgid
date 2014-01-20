@@ -1,14 +1,6 @@
 #include "fcgi_header.h"
 #include "fcgi_defs.h"
 
-#include "phenom/configuration.h"
-#include "phenom/job.h"
-#include "phenom/log.h"
-#include "phenom/sysutil.h"
-#include "phenom/printf.h"
-#include "phenom/listener.h"
-#include "phenom/socket.h"
-#include <sysexits.h>
 #include <stdlib.h>
 
 void print_mem(void const *vp, size_t n)
